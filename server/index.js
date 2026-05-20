@@ -15,7 +15,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+// 读取端口配置
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+let PORT = 3000;
+try {
+  if (fs.existsSync(CONFIG_PATH)) {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    if (config.port && Number.isInteger(config.port)) {
+      PORT = config.port;
+    }
+  }
+} catch (e) {
+  // ignore, fallback to default
+}
 
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(TEMP_DIR, 'uploads');
