@@ -3,6 +3,16 @@ import { cleanupTask } from './frameExtractor.js';
 import { removeTorrent } from './torrentManager.js';
 
 const tasks = new Map();
+const TASK_TTL = 30 * 60 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, t] of tasks) {
+    if (now - t.createdAt > TASK_TTL) {
+      removeTask(id);
+    }
+  }
+}, 5 * 60 * 1000);
 
 function createTask(infoHash, fileIndex, count) {
   const id = uuidv4();
@@ -16,8 +26,7 @@ function createTask(infoHash, fileIndex, count) {
     total: count,
     frames: [],
     error: null,
-    createdAt: Date.now(),
-    torrent: null
+    createdAt: Date.now()
   };
   tasks.set(id, task);
   return id;

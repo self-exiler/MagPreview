@@ -1,6 +1,8 @@
 import WebTorrent from 'webtorrent';
 import { getTrackers } from './trackerList.js';
 
+const MAX_TORRENTS = 20;
+
 const client = new WebTorrent({
   maxConns: 100,
   dht: true,
@@ -29,24 +31,28 @@ function isVideoFile(filename) {
 }
 
 function augmentMagnetUri(magnetUri) {
-  if (!magnetUri.includes('&tr=') && !magnetUri.includes('&tr=')) {
-    const trackerList = getTrackers();
-    const trackers = trackerList.map(t => `&tr=${encodeURIComponent(t)}`).join('');
-    return magnetUri + trackers;
+  if (magnetUri.includes('&tr=')) return magnetUri;
+  const trackerList = getTrackers();
+  return magnetUri + trackerList.map(t => `&tr=${encodeURIComponent(t)}`).join('');
+}
+
+function enforceMaxTorrents() {
+  const torrents = client.torrents;
+  if (torrents.length <= MAX_TORRENTS) return;
+  const sorted = [...torrents].sort((a, b) => (a.lastAccess || 0) - (b.lastAccess || 0));
+  for (let i = 0; i < torrents.length - MAX_TORRENTS; i++) {
+    const t = sorted[i];
+    try { client.remove(t.infoHash); } catch (e) {}
   }
-  return magnetUri;
 }
 
 async function addTorrent(torrentSource) {
-  let sourceKey;
+  let sourceKey = null;
   let augmentedSource = torrentSource;
-  
+
   if (typeof torrentSource === 'string' && torrentSource.startsWith('magnet:')) {
-    sourceKey = augmentMagnetUri(torrentSource);
-    augmentedSource = sourceKey;
-  } else {
-    // For torrent files/buffers, we'll use infoHash as key once available
-    sourceKey = null;
+    augmentedSource = augmentMagnetUri(torrentSource);
+    sourceKey = augmentedSource;
   }
 
   const existing = sourceKey ? await client.get(sourceKey) : null;
@@ -69,14 +75,11 @@ async function addTorrent(torrentSource) {
   }
 
   return new Promise((resolve, reject) => {
-    let timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       cleanup();
-      try { 
-        if (torrent.infoHash) {
-          client.remove(torrent.infoHash); 
-        } else if (sourceKey) {
-          client.remove(sourceKey);
-        }
+      try {
+        if (torrent.infoHash) client.remove(torrent.infoHash);
+        else if (sourceKey) client.remove(sourceKey);
       } catch (e) {}
       reject(new Error('Metadata fetch timed out after 120 seconds'));
     }, 120000);
@@ -90,12 +93,9 @@ async function addTorrent(torrentSource) {
 
     function onError(err) {
       cleanup();
-      try { 
-        if (torrent.infoHash) {
-          client.remove(torrent.infoHash); 
-        } else if (sourceKey) {
-          client.remove(sourceKey);
-        }
+      try {
+        if (torrent.infoHash) client.remove(torrent.infoHash);
+        else if (sourceKey) client.remove(sourceKey);
       } catch (e) {}
       reject(err);
     }
@@ -111,11 +111,11 @@ async function addTorrent(torrentSource) {
   });
 }
 
-async function addMagnet(magnetUri) {
+function addMagnet(magnetUri) {
   return addTorrent(magnetUri);
 }
 
-async function addTorrentFile(torrentBufferOrPath) {
+function addTorrentFile(torrentBufferOrPath) {
   return addTorrent(torrentBufferOrPath);
 }
 
@@ -133,7 +133,9 @@ function removeTorrent(infoHash) {
 }
 
 function getTorrent(infoHash) {
-  return client.get(infoHash);
+  const t = client.get(infoHash);
+  if (t) t.lastAccess = Date.now();
+  return t;
 }
 
 function destroyClient() {
@@ -152,5 +154,6 @@ export {
   getTorrent,
   destroyClient,
   isVideoFile,
-  getServerPort
+  getServerPort,
+  enforceMaxTorrents
 };

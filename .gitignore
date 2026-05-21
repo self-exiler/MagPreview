@@ -2,3 +2,5 @@ node_modules/
 temp/
 data/
 package-lock.json
+.claude/
+docs/
