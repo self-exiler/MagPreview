@@ -10,6 +10,7 @@ import { createTask, getTask, updateTask, removeTask } from './taskManager.js';
 import { extractFrames } from './frameExtractor.js';
 import { getTrackerStatus, updateTrackersFromRemote, resetToDefault } from './trackerList.js';
 import { loadConfig as loadAria2Config, saveConfig as saveAria2Config, pushToAria2, testConnection as testAria2Connection } from './aria2Service.js';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -97,6 +98,7 @@ setInterval(() => {
 app.post('/api/upload', upload.single('torrent'), async (req, res) => {
   try {
     if (!req.file) {
+      logger.warn('Upload attempted without file');
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
@@ -106,8 +108,10 @@ app.post('/api/upload', upload.single('torrent'), async (req, res) => {
       createdAt: Date.now()
     });
 
+    logger.info('File uploaded', { token, filename: req.file.originalname, size: req.file.size });
     res.json({ token });
   } catch (err) {
+    logger.error('Upload failed', { error: err.message });
     res.status(500).json({ error: err.message || 'Upload failed' });
   }
 });
@@ -121,15 +125,20 @@ app.post('/api/parse', async (req, res) => {
     if (token) {
       const uploaded = uploadedTorrents.get(token);
       if (!uploaded) {
+        logger.warn('Parse attempted with invalid or expired token', { token });
         return res.status(404).json({ error: 'Uploaded file not found or expired' });
       }
       torrent = await addTorrentFile(uploaded.filePath);
+      logger.info('Parsed torrent file', { token, infoHash: torrent.infoHash, name: torrent.name });
     } else if (magnetUri) {
       if (!magnetUri.startsWith('magnet:')) {
+        logger.warn('Invalid magnet URI format attempted', { magnetUri: magnetUri.substring(0, 50) });
         return res.status(400).json({ error: 'Invalid magnet URI format' });
       }
       torrent = await addMagnet(magnetUri);
+      logger.info('Parsed magnet URI', { infoHash: torrent.infoHash, name: torrent.name });
     } else {
+      logger.warn('Parse attempted without magnetUri or token');
       return res.status(400).json({ error: 'magnetUri or token is required' });
     }
 
@@ -146,6 +155,7 @@ app.post('/api/parse', async (req, res) => {
       files
     });
   } catch (err) {
+    logger.error('Parse failed', { error: err.message });
     if (err.message && err.message.includes('timed out')) {
       return res.status(408).json({ error: err.message });
     }
@@ -161,19 +171,23 @@ app.post('/api/preview', async (req, res) => {
     if (token) {
       const uploaded = uploadedTorrents.get(token);
       if (!uploaded) {
+        logger.warn('Preview attempted with invalid or expired token', { token });
         return res.status(404).json({ error: 'Uploaded file not found or expired' });
       }
       torrent = await addTorrentFile(uploaded.filePath);
     } else if (magnetUri) {
       if (!magnetUri.startsWith('magnet:')) {
+        logger.warn('Invalid magnet URI for preview', { magnetUri: magnetUri.substring(0, 50) });
         return res.status(400).json({ error: 'Invalid magnet URI format' });
       }
       torrent = await addMagnet(magnetUri);
     } else {
+      logger.warn('Preview attempted without magnetUri or token');
       return res.status(400).json({ error: 'magnetUri or token is required' });
     }
 
     if (fileIndex === undefined || fileIndex === null || isNaN(Number(fileIndex))) {
+      logger.warn('Invalid fileIndex for preview', { fileIndex });
       return res.status(400).json({ error: 'Invalid fileIndex' });
     }
 
@@ -182,6 +196,14 @@ app.post('/api/preview', async (req, res) => {
 
     const taskId = createTask(torrent.infoHash, Number(fileIndex), count);
     updateTask(taskId, { status: 'processing', torrent });
+
+    logger.info('Preview task created', {
+      taskId,
+      infoHash: torrent.infoHash,
+      fileIndex,
+      count,
+      mode: captureMode
+    });
 
     res.json({ taskId });
 
@@ -298,12 +320,57 @@ app.post('/api/aria2/push', async (req, res) => {
     }
 
     const result = await pushToAria2(magnetUri, { dir });
+    logger.info('Aria2 push successful', { magnetUri, gid: result.gid });
     res.json({ success: true, ...result });
   } catch (err) {
+    logger.error('Aria2 push failed', { error: err.message, magnetUri: req.body.magnetUri });
     res.status(500).json({ success: false, error: err.message || 'Push to Aria2 failed' });
+  }
+});
+
+app.get('/api/logs', (req, res) => {
+  try {
+    const options = {
+      level: req.query.level,
+      startTime: req.query.startTime,
+      endTime: req.query.endTime,
+      limit: parseInt(req.query.limit) || 100,
+      offset: parseInt(req.query.offset) || 0,
+      search: req.query.search
+    };
+
+    const result = logger.getLogs(options);
+    res.json(result);
+  } catch (err) {
+    logger.error('Failed to get logs', { error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to get logs' });
+  }
+});
+
+app.get('/api/logs/files', (req, res) => {
+  try {
+    const files = logger.getLogFiles();
+    res.json({ files });
+  } catch (err) {
+    logger.error('Failed to get log files', { error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to get log files' });
+  }
+});
+
+app.delete('/api/logs', (req, res) => {
+  try {
+    const result = logger.clearLogs();
+    if (result.success) {
+      logger.info('Logs cleared by user');
+    }
+    res.json(result);
+  } catch (err) {
+    logger.error('Failed to clear logs', { error: err.message });
+    res.status(500).json({ error: err.message || 'Failed to clear logs' });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  logger.info('MagPreview server started', { port: PORT });
 });

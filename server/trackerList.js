@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import https from 'https';
 import http from 'http';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -93,29 +94,41 @@ function fetchUrl(url) {
 }
 
 async function updateTrackersFromRemote() {
-  const text = await fetchUrl(REMOTE_URL);
-  const trackers = text
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0 && (line.startsWith('udp://') || line.startsWith('http://') || line.startsWith('https://') || line.startsWith('wss://')));
+  try {
+    const text = await fetchUrl(REMOTE_URL);
+    const trackers = text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && (line.startsWith('udp://') || line.startsWith('http://') || line.startsWith('https://') || line.startsWith('wss://')));
 
-  if (trackers.length === 0) {
-    throw new Error('No valid trackers found in remote list');
+    if (trackers.length === 0) {
+      throw new Error('No valid trackers found in remote list');
+    }
+
+    const wsTrackers = [
+      'wss://tracker.openwebtorrent.com',
+      'wss://tracker.btorrent.xyz'
+    ];
+
+    const previousCount = currentTrackers.length;
+    currentTrackers = [...trackers, ...wsTrackers.filter(ws => !trackers.includes(ws))];
+    lastUpdated = new Date().toISOString();
+    saveTrackersToDisk();
+    
+    logger.info('Trackers updated from remote', {
+      previousCount,
+      newCount: currentTrackers.length,
+      source: REMOTE_URL
+    });
+
+    return {
+      count: currentTrackers.length,
+      lastUpdated: lastUpdated
+    };
+  } catch (err) {
+    logger.error('Failed to update trackers from remote', { error: err.message });
+    throw err;
   }
-
-  const wsTrackers = [
-    'wss://tracker.openwebtorrent.com',
-    'wss://tracker.btorrent.xyz'
-  ];
-
-  currentTrackers = [...trackers, ...wsTrackers.filter(ws => !trackers.includes(ws))];
-  lastUpdated = new Date().toISOString();
-  saveTrackersToDisk();
-
-  return {
-    count: currentTrackers.length,
-    lastUpdated: lastUpdated
-  };
 }
 
 function getTrackers() {
@@ -132,9 +145,16 @@ function getTrackerStatus() {
 }
 
 function resetToDefault() {
+  const previousCount = currentTrackers.length;
   currentTrackers = [...DEFAULT_TRACKERS];
   lastUpdated = null;
   saveTrackersToDisk();
+  
+  logger.info('Trackers reset to default', {
+    previousCount,
+    newCount: currentTrackers.length
+  });
+  
   return {
     count: currentTrackers.length,
     lastUpdated: null,
